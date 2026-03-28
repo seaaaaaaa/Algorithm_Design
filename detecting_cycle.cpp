@@ -9,7 +9,7 @@ bool dfs(int i,vector<set<int>> &adj, vector<bool> &visited, int parent){
   visited[i]= true;
   for(auto &x:adj[i]){
     if(visited[x]==false){
-      dfs(x,adj,visited,i);
+      if(dfs(x,adj,visited,i))return true;
     } else if(x!=parent){
       return true;
     }
@@ -19,14 +19,19 @@ bool dfs(int i,vector<set<int>> &adj, vector<bool> &visited, int parent){
 
 void circuit_detect(vector<set<int>> &adj){
   vector<bool> visited(adj.size(),false);
+  bool has_cycle = false;
   for(int i=0;i<adj.size();i++){
     if(visited[i]==false){
       if(dfs(i,adj,visited,-1)){
-        cout << "YES" << endl;
-      } else {
-        cout << "NO"<< endl;
+        has_cycle = true;
+        break;
       }
     }
+  }
+  if(has_cycle){
+    cout << "YES" << endl;
+  } else {
+    cout << "NO" << endl;
   }
 }
 
