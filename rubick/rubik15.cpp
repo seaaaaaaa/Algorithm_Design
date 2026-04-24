@@ -17,9 +17,6 @@ bool locked[MAXN][MAXN];
 int br, bc; 
 string ans = "";
 
-// 🥈 The Silver Ratio: สมดุลระหว่างหาทางลัด (H=1) กับการเดินเป็นระเบียบ (H=6)
-const int H_WEIGHT = 2; 
-
 void apply_move(char m) {
     ans += m;
     int tr = br, tc = bc;
@@ -38,14 +35,27 @@ void apply_moves(string moves) {
 }
 
 // ==========================================
-// 1. เรดาร์ BFS
+// Check if a tile is resting on its target
+// ==========================================
+inline bool is_perfect(int r, int c) {
+    if (r >= 1 && r <= N - 2 && c >= 1 && c <= N - 2) {
+        return board[r][c] == target[r - 1][c - 1];
+    }
+    return false;
+}
+
+// ==========================================
+// Pure BFS Distance Map
 // ==========================================
 vector<vector<int>> get_all_distances_from(int start_r, int start_c) {
     vector<vector<int>> dist(N, vector<int>(N, -1));
     queue<pair<int, int>> q;
+    if (start_r < 0 || start_r >= N || start_c < 0 || start_c >= N) return dist;
+
     q.push({start_r, start_c});
     dist[start_r][start_c] = 0;
-    int dr[] = {-1, 1, 0, 0}; int dc[] = {0, 0, -1, 1};
+    int dr[] = {-1, 1, 0, 0}, dc[] = {0, 0, -1, 1};
+    
     while(!q.empty()){
         auto [r, c] = q.front(); q.pop();
         for(int i=0; i<4; i++){
@@ -60,35 +70,34 @@ vector<vector<int>> get_all_distances_from(int start_r, int start_c) {
 }
 
 // ==========================================
-// 2. Micro BFS
+// Fast Blank BFS (Dual-Pass Non-Destructive)
 // ==========================================
-short b_visited[MAXN][MAXN];
-short b_visit_id = 0;
+int b_visited[MAXN][MAXN], b_visit_id = 0;
 int b_q_r[MAXN * MAXN], b_q_c[MAXN * MAXN];
 pair<short, short> b_parent[MAXN][MAXN];
 char b_move_from[MAXN][MAXN];
 
-string fast_bfs_blank(int sr, int sc, int tr, int tc, int avoid_r, int avoid_c) {
+string fast_bfs_blank_inner(int sr, int sc, int tr, int tc, int avoid_r, int avoid_c, bool avoid_perf) {
     if (sr == tr && sc == tc) return "";
     b_visit_id++;
-    
     int head = 0, tail = 0;
     b_q_r[tail] = sr; b_q_c[tail] = sc; tail++;
     b_visited[sr][sc] = b_visit_id;
-    
-    int b_dr[] = {1, -1, 0, 0}; int b_dc[] = {0, 0, 1, -1};
+    int b_dr[] = {1, -1, 0, 0}, b_dc[] = {0, 0, 1, -1};
     char b_char[] = {'U', 'D', 'L', 'R'};
-    
     bool found = false;
+    
     while(head < tail) {
         int r = b_q_r[head], c = b_q_c[head]; head++;
         if (r == tr && c == tc) { found = true; break; }
-        
         for (int i=0; i<4; i++) {
             int nr = r + b_dr[i], nc = c + b_dc[i];
             if (nr >= 0 && nr < N && nc >= 0 && nc < N) {
                 if (nr == avoid_r && nc == avoid_c) continue;
                 if (locked[nr][nc]) continue;
+                // Core V51 feature: Don't trample perfectly placed tiles
+                if (avoid_perf && is_perfect(nr, nc)) continue;
+                
                 if (b_visited[nr][nc] != b_visit_id) {
                     b_visited[nr][nc] = b_visit_id;
                     b_parent[nr][nc] = {r, c};
@@ -99,7 +108,6 @@ string fast_bfs_blank(int sr, int sc, int tr, int tc, int avoid_r, int avoid_c) 
         }
     }
     if (!found) return "FAILED";
-    
     string path = "";
     int cr = tr, cc = tc;
     while(cr != sr || cc != sc) {
@@ -111,30 +119,33 @@ string fast_bfs_blank(int sr, int sc, int tr, int tc, int avoid_r, int avoid_c) 
     return path;
 }
 
+string fast_bfs_blank(int sr, int sc, int tr, int tc, int avoid_r, int avoid_c) {
+    // Pass 1: Try to path without destroying future targets
+    string res = fast_bfs_blank_inner(sr, sc, tr, tc, avoid_r, avoid_c, true);
+    // Pass 2: Fallback to destructive path if absolutely necessary
+    if (res == "FAILED") {
+        res = fast_bfs_blank_inner(sr, sc, tr, tc, avoid_r, avoid_c, false);
+    }
+    return res;
+}
+
 // ==========================================
-// 3. MACRO A* V9: The Silver Ratio + Turn Stabilizer
+// A* Macro Routing
 // ==========================================
 struct MacroState { short r, c, bd; };
 MacroState parent_macro[MAXN][MAXN][4];
 string move_macro[MAXN][MAXN][4];
-int dist_macro[MAXN][MAXN][4];
-int macro_visited[MAXN][MAXN][4];
-int macro_search_id = 0;
+int dist_macro[MAXN][MAXN][4], macro_visited[MAXN][MAXN][4], macro_search_id = 0;
 
 struct MacroNode {
-    int f, g, turns; short r, c, bd;
-    bool operator>(const MacroNode& o) const {
-        if (f != o.f) return f > o.f;                   // 1. หาเส้นทางที่สั้นที่สุด
-        if (turns != o.turns) return turns > o.turns;   // 2. ถ้าก้าวเท่ากัน เลือกทางที่เลี้ยว "น้อยกว่า" (รักษาระเบียบกระดาน)
-        return g < o.g;                                 // 3. เดินเข้าใกล้เป้าหมายมากที่สุด
-    }
+    int f, g, h; short r, c, bd;
+    bool operator>(const MacroNode& o) const { return (f != o.f) ? f > o.f : h > o.h; }
 };
 
-string macro_a_star(int sr, int sc, int tar_r, int tar_c, const vector<vector<int>>& dist_map, int best_so_far) {
+string macro_a_star(int sr, int sc, int tar_r, int tar_c, const vector<vector<int>>& dist_map) {
     macro_search_id++;
     priority_queue<MacroNode, vector<MacroNode>, greater<MacroNode>> pq;
-    
-    int t_dr[] = {-1, 1, 0, 0}; int t_dc[] = {0, 0, -1, 1}; char t_char[] = {'U', 'D', 'L', 'R'};
+    int t_dr[] = {-1, 1, 0, 0}, t_dc[] = {0, 0, -1, 1}; char t_char[] = {'U', 'D', 'L', 'R'};
     
     for (int i=0; i<4; i++) {
         int nbr = sr + t_dr[i], nbc = sc + t_dc[i];
@@ -142,66 +153,50 @@ string macro_a_star(int sr, int sc, int tar_r, int tar_c, const vector<vector<in
             string b_path = fast_bfs_blank(br, bc, nbr, nbc, sr, sc);
             if (b_path != "FAILED") {
                 int g = b_path.length();
-                int true_h = dist_map[sr][sc];
-                
-                if (g + true_h >= best_so_far) continue; // Pruning ด้วยก้าวจริง 100%
-                
-                int f_score = g + (true_h * H_WEIGHT);
-                
                 macro_visited[sr][sc][i] = macro_search_id;
                 dist_macro[sr][sc][i] = g;
                 parent_macro[sr][sc][i] = {-1, -1, -1};
                 move_macro[sr][sc][i] = b_path;
                 
-                pq.push({f_score, g, 0, (short)sr, (short)sc, (short)i});
+                int h = dist_map[sr][sc] * 3;
+                pq.push({g + h, g, h, (short)sr, (short)sc, (short)i});
             }
         }
     }
     
     while(!pq.empty()) {
         auto curr = pq.top(); pq.pop();
-        int g = curr.g; short r = curr.r, c = curr.c, bd = curr.bd, turns = curr.turns;
-        
-        if (g + dist_map[r][c] >= best_so_far) continue; 
-        if (g > dist_macro[r][c][bd]) continue;
-        
+        int g = curr.g; short r = curr.r, c = curr.c, bd = curr.bd;
+        if (g > dist_macro[r][c][bd]) continue; 
         if (r == tar_r && c == tar_c) {
-            string full_path = "";
-            short cr = r, cc = c, cbd = bd;
+            string full_path = ""; short cr = r, cc = c, cbd = bd;
             while(cr != sr || cc != sc) {
                 full_path = move_macro[cr][cc][cbd] + full_path;
                 auto p = parent_macro[cr][cc][cbd];
                 cr = p.r; cc = p.c; cbd = p.bd;
             }
-            full_path = move_macro[sr][sc][cbd] + full_path;
-            return full_path;
+            return move_macro[sr][sc][cbd] + full_path;
         }
-        
         for (int i=0; i<4; i++) {
             int nr = r + t_dr[i], nc = c + t_dc[i];
             if (nr >= 0 && nr < N && nc >= 0 && nc < N && !locked[nr][nc]) {
-                int target_br = nr, target_bc = nc; 
-                int current_br = r + t_dr[bd], current_bc = c + t_dc[bd];
-                
-                string b_path = fast_bfs_blank(current_br, current_bc, target_br, target_bc, r, c);
+                string b_path = fast_bfs_blank(r + t_dr[bd], c + t_dc[bd], nr, nc, r, c);
                 if (b_path != "FAILED") {
                     int step_cost = b_path.length() + 1;
+                    
+                    // Soft penalty to prevent dragging the target tile over perfect spots
+                    if (is_perfect(nr, nc)) step_cost += 15; 
+                    
                     int new_g = g + step_cost;
-                    int true_h = dist_map[nr][nc];
-                    
-                    if (new_g + true_h >= best_so_far) continue; 
-                    
+                    int h = dist_map[nr][nc] * 3; 
                     short new_bd = i ^ 1; 
-                    int new_turns = turns + (bd != new_bd ? 1 : 0);
                     
                     if (macro_visited[nr][nc][new_bd] != macro_search_id || new_g < dist_macro[nr][nc][new_bd]) {
                         macro_visited[nr][nc][new_bd] = macro_search_id;
                         dist_macro[nr][nc][new_bd] = new_g;
                         parent_macro[nr][nc][new_bd] = {r, c, bd};
                         move_macro[nr][nc][new_bd] = b_path + t_char[i];
-                        
-                        int f_score = new_g + (true_h * H_WEIGHT);
-                        pq.push({f_score, new_g, new_turns, (short)nr, (short)nc, new_bd});
+                        pq.push({new_g + h, new_g, h, (short)nr, (short)nc, new_bd});
                     }
                 }
             }
@@ -211,97 +206,116 @@ string macro_a_star(int sr, int sc, int tar_r, int tar_c, const vector<vector<in
 }
 
 // ==========================================
-// 4. Optimize ขั้นสุดท้าย 
+// V51: Evaluator
 // ==========================================
-string optimize_final_path(string path) {
-    string opt = "";
-    for (char m : path) {
-        if (!opt.empty()) {
-            char last = opt.back();
-            if ((m == 'U' && last == 'D') || (m == 'D' && last == 'U') ||
-                (m == 'L' && last == 'R') || (m == 'R' && last == 'L')) { opt.pop_back(); continue; }
+struct Candidate { int r, c, score; };
+
+string solve_single_tile(int tr, int tc, int needed_val) {
+    vector<vector<int>> dist_map = get_all_distances_from(tr, tc);
+    vector<vector<int>> blank_bfs = get_all_distances_from(br, bc);
+    vector<Candidate> cands;
+    
+    for (int r = 0; r < N; r++) {
+        for (int c = 0; c < N; c++) {
+            if (board[r][c] == needed_val && !locked[r][c] && dist_map[r][c] != -1) {
+                
+                int b_dist = blank_bfs[r][c];
+                if (b_dist == -1) b_dist = 1000;
+                
+                // Dynamic Highway Bias based on board dimensions
+                int dist_to_highway = min({r, N - 1 - r, c, N - 1 - c});
+                int expected = b_dist + (4 * dist_map[r][c]) + (dist_to_highway * 2);
+                
+                // Absolute Veto: Do not steal tiles that are already home
+                if (is_perfect(r, c)) expected += 10000;
+                
+                cands.push_back({r, c, expected});
+            }
         }
-        opt.push_back(m);
     }
-    return opt;
+    
+    if (cands.empty()) return "FAILED";
+    
+    sort(cands.begin(), cands.end(), [](const Candidate& a, const Candidate& b){
+        return a.score < b.score;
+    });
+
+    string best_path = "FAILED"; 
+    int min_moves = 2e9;
+    
+    // Evaluate Top 12 (Safely finds absolute best path among candidates)
+    int limit = min((int)cands.size(), 12);
+    for (int i = 0; i < limit; i++) {
+        string path = macro_a_star(cands[i].r, cands[i].c, tr, tc, dist_map);
+        if (path != "FAILED") {
+            int moves = path.length();
+            if (moves < min_moves) {
+                best_path = path;
+                min_moves = moves;
+            }
+        }
+    }
+    return best_path;
 }
 
-struct Candidate { int r, c, raw_d, b_dist; };
+// ==========================================
+// Peephole Optimizer 
+// ==========================================
+string optimize_final_path(string path) {
+    bool changed = true;
+    while (changed) {
+        changed = false; string opt = "";
+        for (char m : path) {
+            if (!opt.empty()) {
+                char last = opt.back();
+                if ((m == 'U' && last == 'D') || (m == 'D' && last == 'U') ||
+                    (m == 'L' && last == 'R') || (m == 'R' && last == 'L')) { opt.pop_back(); changed = true; continue; }
+            }
+            opt.push_back(m);
+        }
+        path = opt;
+    }
+    return path;
+}
 
 int main() {
-    ios_base::sync_with_stdio(false);
-    cin.tie(NULL);
-
-    memset(b_visited, 0, sizeof(b_visited));
-    memset(macro_visited, 0, sizeof(macro_visited));
-    
+    ios_base::sync_with_stdio(false); cin.tie(NULL);
     if (!(cin >> N)) return 0;
-
+    
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
-            cin >> board[i][j];
-            if (board[i][j] == -1) { br = i; bc = j; }
+            cin >> board[i][j]; if (board[i][j] == -1) { br = i; bc = j; }
             locked[i][j] = false;
         }
     }
-    for (int i = 0; i < N - 2; i++) {
-        for (int j = 0; j < N - 2; j++) { cin >> target[i][j]; }
-    }
-
-    cerr << ">>> Running MACRO A* V9 (Silver Ratio H*2 + Turn Stabilizer)...\n";
-
+    for (int i = 0; i < N - 2; i++) for (int j = 0; j < N - 2; j++) cin >> target[i][j];
+    
+    cerr << ">>> Running MACRO A* V51 (The Harmonizer)...\n";
+    
     for (int tr = 1; tr <= N - 2; tr++) {
-        for (int tc = 1; tc <= N - 2; tc++) {
-            int needed_val = target[tr - 1][tc - 1];
-            
-            if (board[tr][tc] == needed_val) {
+        if (tr % 2 == 1) {
+            for (int tc = 1; tc <= N - 2; tc++) {
+                int needed = target[tr - 1][tc - 1];
+                if (board[tr][tc] != needed) {
+                    string path = solve_single_tile(tr, tc, needed);
+                    if (path != "FAILED") apply_moves(path);
+                }
                 locked[tr][tc] = true;
-                continue;
             }
-
-            vector<vector<int>> dist_map = get_all_distances_from(tr, tc);
-            
-            vector<Candidate> cands;
-            for (int r = 0; r < N; r++) {
-                for (int c = 0; c < N; c++) {
-                    if (board[r][c] == needed_val && !locked[r][c] && dist_map[r][c] != -1) {
-                        int b_dist = abs(br - r) + abs(bc - c);
-                        cands.push_back({r, c, dist_map[r][c], b_dist});
-                    }
+        } else {
+            for (int tc = N - 2; tc >= 1; tc--) {
+                int needed = target[tr - 1][tc - 1];
+                if (board[tr][tc] != needed) {
+                    string path = solve_single_tile(tr, tc, needed);
+                    if (path != "FAILED") apply_moves(path);
                 }
+                locked[tr][tc] = true;
             }
-            
-            // เรียงลำดับตัวเลือกเพื่อเร่งความเร็วในการ Pruning
-            sort(cands.begin(), cands.end(), [](const Candidate& a, const Candidate& b){
-                return (a.raw_d * 4 + a.b_dist) < (b.raw_d * 4 + b.b_dist);
-            });
-
-            string best_path = "FAILED";
-            int min_moves = 1e9; 
-
-            for (auto& cand : cands) {
-                if (cand.raw_d >= min_moves) continue; 
-                
-                string path = macro_a_star(cand.r, cand.c, tr, tc, dist_map, min_moves);
-                
-                if (path != "FAILED" && path.length() < min_moves) {
-                    min_moves = path.length();
-                    best_path = path;
-                }
-            }
-
-            if (best_path != "FAILED") {
-                apply_moves(best_path);
-            } else {
-                cerr << "    [FATAL] Macro A* Failed at (" << tr << "," << tc << ").\n";
-            }
-            locked[tr][tc] = true;
         }
     }
-
+    
     string final_ans = optimize_final_path(ans) + "S";
     cerr << ">>> MACRO A* SOLVED!\n>>> Final Moves: " << final_ans.length() - 1 << "\n";
     cout << final_ans << "\n";
-
     return 0;
 }
